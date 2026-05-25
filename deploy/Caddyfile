@@ -1,0 +1,14 @@
+{
+    # Email used for Let's Encrypt account; ACME challenges go over :80.
+    email {$ACME_EMAIL}
+}
+
+{$BRIDGE_HOST} {
+    @authed header Authorization "Bearer {$IBKR_BRIDGE_TOKEN}"
+
+    handle @authed {
+        reverse_proxy 127.0.0.1:5050
+    }
+
+    respond "unauthorized" 401
+}

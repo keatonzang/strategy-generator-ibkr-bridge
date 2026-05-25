@@ -1,0 +1,35 @@
+services:
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    container_name: ib-gateway
+    restart: unless-stopped
+    env_file: /etc/strategy-generator/ibkr.env
+    environment:
+      TRADING_MODE: paper
+      READ_ONLY_API: "yes"
+      TIME_ZONE: America/New_York
+      # IBC schedules its own restart at 11:45pm ET via these.
+      RESTART_RECONNECT: "yes"
+    expose:
+      - "4002"
+    networks: [bridge-net]
+
+  ibkr-bridge:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: ibkr-bridge
+    restart: unless-stopped
+    environment:
+      IBKR_HOST: ib-gateway
+      IBKR_PORT: "4002"
+      IBKR_CLIENT_ID: "42"
+    ports:
+      - "127.0.0.1:5050:5050"
+    depends_on:
+      - ib-gateway
+    networks: [bridge-net]
+
+networks:
+  bridge-net:
+    driver: bridge
