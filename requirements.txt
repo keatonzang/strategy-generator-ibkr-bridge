@@ -2,3 +2,8 @@ fastapi==0.115.0
 uvicorn[standard]==0.30.6
 ib_insync==0.9.86
 pydantic==2.9.2
+# Required because ib_insync parses IBKR bar timestamps with legacy zone
+# names like "US/Central". python:3.12-slim's apt tzdata omits these
+# aliases (Debian split them into tzdata-legacy). Python tzdata package
+# vendors the full IANA db so zoneinfo.ZoneInfo can resolve them.
+tzdata==2024.2

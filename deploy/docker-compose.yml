@@ -12,7 +12,12 @@ services:
       RESTART_RECONNECT: "yes"
     expose:
       - "4002"
-    networks: [bridge-net]
+    # Bridge's 5050 is published here because ibkr-bridge shares this
+    # network namespace (see network_mode below). IB Gateway only trusts
+    # 127.0.0.1 by default, so the bridge must connect from inside this
+    # net ns to be treated as localhost.
+    ports:
+      - "127.0.0.1:5050:5050"
 
   ibkr-bridge:
     build:
@@ -21,15 +26,9 @@ services:
     container_name: ibkr-bridge
     restart: unless-stopped
     environment:
-      IBKR_HOST: ib-gateway
+      IBKR_HOST: 127.0.0.1
       IBKR_PORT: "4002"
       IBKR_CLIENT_ID: "42"
-    ports:
-      - "127.0.0.1:5050:5050"
     depends_on:
       - ib-gateway
-    networks: [bridge-net]
-
-networks:
-  bridge-net:
-    driver: bridge
+    network_mode: "service:ib-gateway"
