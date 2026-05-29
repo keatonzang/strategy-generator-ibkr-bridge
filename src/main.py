@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
@@ -35,7 +36,11 @@ LookbackKey = Literal["1mo", "3mo", "6mo", "1y", "2y", "5y"]
 
 # Max seconds to wait for IBKR to return bars before giving up. IBKR stalls
 # silently on over-limit requests, so this must fire to avoid hanging forever.
-HISTORICAL_TIMEOUT_S = 30
+# Set generously: cold HMDS fetches of valid combos for this paper ContFuture
+# run ~25-30 s, so a 30 s cap falsely trips on good requests. The bar-count
+# guardrail (mappings.MAX_BARS_PER_REQUEST) already blocks the huge combos, so
+# anything reaching this wait should complete. Env-overridable for tuning.
+HISTORICAL_TIMEOUT_S = int(os.environ.get("HISTORICAL_TIMEOUT_S", "55"))
 
 
 class HistoricalRequest(BaseModel):
