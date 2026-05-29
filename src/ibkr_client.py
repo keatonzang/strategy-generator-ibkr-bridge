@@ -48,9 +48,21 @@ async def is_connected() -> bool:
     return _ib is not None and _ib.isConnected()
 
 
-async def reset_for_tests() -> None:
-    """Drop the singleton so tests can re-monkeypatch get_ib."""
+async def drop_connection() -> None:
+    """Disconnect and clear the singleton so the next call reconnects clean.
+
+    Called after a historical-request timeout: asyncio.wait_for cancels only the
+    Python coroutine, leaving the request open on IB Gateway (ib_insync does not
+    cancel the reqId). Those leaked requests accumulate and eventually stall every
+    subsequent request. Dropping the client makes IB Gateway release them
+    ('remove Client N') so a single bad request can't degrade the connection.
+    """
     global _ib
     if _ib is not None and _ib.isConnected():
         _ib.disconnect()
     _ib = None
+
+
+async def reset_for_tests() -> None:
+    """Drop the singleton so tests can re-monkeypatch get_ib."""
+    await drop_connection()

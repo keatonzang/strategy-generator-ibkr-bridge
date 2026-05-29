@@ -100,3 +100,54 @@ def test_historical_connect_failure_returns_503(monkeypatch):
     r = client.post("/historical", json={"symbol": "ES", "barSize": "1h", "lookback": "3mo"})
     assert r.status_code == 503
     assert "IBKR Gateway unreachable" in r.json()["detail"]
+
+
+def test_historical_rejects_over_limit_combo_before_calling_ib(monkeypatch):
+    # 1m/1y is far over the single-request bar limit -> 400 without touching IB.
+    called = False
+
+    async def fake_get_ib():
+        nonlocal called
+        called = True
+        return MagicMock()
+
+    monkeypatch.setattr(main, "get_ib", fake_get_ib)
+
+    client = TestClient(main.app)
+    r = client.post("/historical", json={"symbol": "ES", "barSize": "1m", "lookback": "1y"})
+    assert r.status_code == 400
+    assert "larger bar size" in r.json()["detail"]
+    assert called is False  # rejected before any IB call
+
+
+def test_historical_timeout_drops_connection_and_returns_504(monkeypatch):
+    import asyncio
+
+    fake_ib = MagicMock()
+    fake_ib.isConnected.return_value = True
+    fake_ib.qualifyContractsAsync = AsyncMock(return_value=None)
+
+    async def never_returns(*args, **kwargs):
+        await asyncio.sleep(1)  # longer than the patched timeout below
+
+    fake_ib.reqHistoricalDataAsync = AsyncMock(side_effect=never_returns)
+
+    async def fake_get_ib():
+        return fake_ib
+
+    dropped = False
+
+    async def fake_drop():
+        nonlocal dropped
+        dropped = True
+
+    monkeypatch.setattr(main, "get_ib", fake_get_ib)
+    monkeypatch.setattr(main, "drop_connection", fake_drop)
+    monkeypatch.setattr(main, "HISTORICAL_TIMEOUT_S", 0.05)
+
+    client = TestClient(main.app)
+    r = client.post("/historical", json={"symbol": "ES", "barSize": "1h", "lookback": "1mo"})
+
+    assert r.status_code == 504, r.text
+    assert "larger bar size" in r.json()["detail"]
+    assert dropped is True  # connection dropped so the stall doesn't leak

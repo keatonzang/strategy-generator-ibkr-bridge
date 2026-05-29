@@ -12,12 +12,14 @@ from pydantic import BaseModel
 
 from .contracts import UnknownSymbol, resolve_exchange
 from .csv_writer import bars_to_csv
-from .ibkr_client import get_ib, is_connected
+from .ibkr_client import drop_connection, get_ib, is_connected
 from .mappings import (
     UnknownBarSize,
     UnknownLookback,
+    UnsupportedCombo,
     resolve_bar_size,
     resolve_lookback,
+    validate_combo,
 )
 
 logging.basicConfig(
@@ -30,6 +32,10 @@ app = FastAPI(title="IBKR bridge")
 
 BarKey = Literal["1m", "5m", "15m", "1h", "1d"]
 LookbackKey = Literal["1mo", "3mo", "6mo", "1y", "2y", "5y"]
+
+# Max seconds to wait for IBKR to return bars before giving up. IBKR stalls
+# silently on over-limit requests, so this must fire to avoid hanging forever.
+HISTORICAL_TIMEOUT_S = 30
 
 
 class HistoricalRequest(BaseModel):
@@ -45,6 +51,11 @@ async def health() -> dict:
 
 @app.post("/historical")
 async def historical(req: HistoricalRequest) -> dict:
+    log.info(
+        "historical request symbol=%s bar=%s lookback=%s",
+        req.symbol, req.barSize, req.lookback,
+    )
+
     try:
         exchange = resolve_exchange(req.symbol)
     except UnknownSymbol as exc:
@@ -54,6 +65,13 @@ async def historical(req: HistoricalRequest) -> dict:
         bar_str = resolve_bar_size(req.barSize)
         dur_str = resolve_lookback(req.lookback)
     except (UnknownBarSize, UnknownLookback) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # Reject over-volume combos up front: IBKR would stall silently for 30 s.
+    try:
+        validate_combo(req.barSize, req.lookback)
+    except UnsupportedCombo as exc:
+        log.info("historical rejected (over limit): %s", exc)
         raise HTTPException(status_code=400, detail=str(exc))
 
     try:
@@ -79,12 +97,31 @@ async def historical(req: HistoricalRequest) -> dict:
                 useRTH=False,
                 formatDate=1,
             ),
-            timeout=30,
+            timeout=HISTORICAL_TIMEOUT_S,
         )
     except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="IBKR request timed out after 30 s")
+        # The request is still open on IB Gateway; drop the client so it doesn't
+        # leak and stall every later request (see ibkr_client.drop_connection).
+        log.warning(
+            "historical timed out symbol=%s bar=%s lookback=%s; dropping IB connection",
+            req.symbol, req.barSize, req.lookback,
+        )
+        await drop_connection()
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                f"No data returned for {req.symbol.upper()} "
+                f"{req.barSize}/{req.lookback} within {HISTORICAL_TIMEOUT_S}s. "
+                f"Try a larger bar size or a shorter lookback."
+            ),
+        )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"reqHistoricalData failed: {exc}")
+
+    log.info(
+        "historical ok symbol=%s bar=%s lookback=%s bars=%d",
+        req.symbol, req.barSize, req.lookback, len(bars),
+    )
 
     if not bars:
         raise HTTPException(
